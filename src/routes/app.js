@@ -31,12 +31,15 @@ const createFeeBumpRouter = require('./admin/feeBump');
 const dbAdminRoutes = require('./admin/db');
 const retentionAdminRoutes = require('./admin/retention');
 const backupAdminRoutes = require('./admin/backup');
+const encryptionAdminRoutes = require('./admin/encryption');
 const matchingProgramsAdminRoutes = require('./admin/matchingPrograms');
 const corporateMatchingAdminRoutes = require('./admin/corporateMatching');
 const corporateMatchingRoutes = require('./corporateMatching');
 const routingAdminRoutes = require('./admin/routing');
 const impactMetricsAdminRoutes = require('./admin/impactMetrics');
+const impactRoutes = require('./impact');
 const adminAnalyticsRoutes = require('./admin/analytics');
+const reconciliationAdminRoutes = require('./admin/reconciliation');
 const networkRoutes = require('./network');
 const webhooksRoutes = require('./webhooks');
 const campaignsRoutes = require('./campaigns');
@@ -61,6 +64,7 @@ const { attachLifecycleTracking } = require('../middleware/requestLifecycle');
 const serviceContainer = require('../config/serviceContainer');
 const { payloadSizeLimiter } = require('../middleware/payloadSizeLimiter');
 const { createCorsMiddleware } = require('../middleware/cors');
+const { createCspMiddleware, cspReportRouter } = require('../middleware/csp');
 const { responseFormatterMiddleware } = require('../utils/responseFormatter');
 const trackQuotaUsage = require('../middleware/quotaTracker');
 const { startQuotaResetJob } = require('../jobs/quotaResetJob');
@@ -157,6 +161,10 @@ app.use(helmet({
 // CORS (must be before body parsers and route handlers)
 app.use(createCorsMiddleware());
 
+// CSP: per-request nonce + strict directives (after helmet, before routes)
+app.use(createCspMiddleware());
+app.use(cspReportRouter);
+
 // Geographic IP blocking (must be before body parsers)
 app.use(require('../middleware/geoBlock'));
 
@@ -220,13 +228,16 @@ app.use('/fees', feesRoutes);
 app.use('/admin/feature-flags', featureFlagsAdminRoutes);
 app.use('/admin/db', dbAdminRoutes);
 app.use('/admin/retention', retentionAdminRoutes);
+app.use('/admin/encryption', encryptionAdminRoutes);
 app.use('/admin', backupAdminRoutes);
 app.use('/admin/matching-programs', matchingProgramsAdminRoutes);
 app.use('/admin/corporate-matching', corporateMatchingAdminRoutes);
 app.use('/corporate-matching', corporateMatchingRoutes);
 app.use('/admin/routing', routingAdminRoutes);
 app.use('/admin/impact-metrics', impactMetricsAdminRoutes);
+app.use('/impact', impactRoutes);
 app.use('/admin/analytics', adminAnalyticsRoutes);
+app.use('/admin/reconciliation', reconciliationAdminRoutes);
 app.use('/admin/geo-blocking', require('./admin/geoBlocking'));
 app.use('/admin/cors', require('./admin/corsOrigins'));
 
