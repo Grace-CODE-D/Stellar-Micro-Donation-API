@@ -665,12 +665,12 @@ describe('getExecutionLogs and getRecentFailures', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 // Mock heavy middleware dependencies for route tests
-jest.mock('../src/middleware/rbac', () => ({
+jest.mock('../../src/middleware/rbac', () => ({
   checkPermission: () => (req, res, next) => next(),
   requireAdmin: () => (req, res, next) => next(),
   attachUserRole: () => (req, res, next) => { req.user = { role: 'admin' }; next(); },
 }));
-jest.mock('../src/config/serviceContainer', () => ({
+jest.mock('../../src/config/serviceContainer', () => ({
   getRecurringDonationScheduler: () => ({
     calculateNextExecutionDate: (date, freq, days) => {
       const next = new Date(date);
