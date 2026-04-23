@@ -1,3 +1,22 @@
+/**
+ * Wallet Routes - API Endpoint Layer
+ * 
+ * RESPONSIBILITY: HTTP request handling for wallet operations
+ * OWNER: Backend Team
+ * DEPENDENCIES: WalletService, middleware (auth, RBAC)
+ * 
+ * Thin controllers that orchestrate service calls for wallet creation, updates,
+ * and transaction history queries. All business logic delegated to WalletService.
+ */
+
+const express = require('express');
+const router = express.Router();
+const { checkPermission, requireAdmin } = require('../middleware/rbac');
+const { PERMISSIONS } = require('../utils/permissions');
+const LimitService = require('../services/LimitService');
+const Database = require('../utils/database');
+const { buildErrorResponse } = require('../utils/validationErrorFormatter');
+
 // Inflation destination schema for PATCH
 const inflationDestinationSchema = {
   type: 'object',
@@ -112,16 +131,6 @@ router.get('/:id/inflation-destination', checkPermission(PERMISSIONS.WALLETS_REA
     next(error);
   }
 });
-/**
- * Wallet Routes - API Endpoint Layer
- * 
- * RESPONSIBILITY: HTTP request handling for wallet operations
- * OWNER: Backend Team
- * DEPENDENCIES: WalletService, middleware (auth, RBAC)
- * 
- * Thin controllers that orchestrate service calls for wallet creation, updates,
- * and transaction history queries. All business logic delegated to WalletService.
- */
 
 /**
  * @openapi
@@ -219,14 +228,6 @@ router.get('/:id/inflation-destination', checkPermission(PERMISSIONS.WALLETS_REA
  *       200:
  *         description: Transaction list
  */
-
-const express = require('express');
-const router = express.Router();
-const { checkPermission, requireAdmin } = require('../middleware/rbac');
-const { PERMISSIONS } = require('../utils/permissions');
-const LimitService = require('../services/LimitService');
-const Database = require('../utils/database');
-const { buildErrorResponse } = require('../utils/validationErrorFormatter');
 
 /**
  * POST /wallets
