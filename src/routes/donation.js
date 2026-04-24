@@ -405,6 +405,60 @@ router.get('/:id/certificate', checkPermission(PERMISSIONS.DONATIONS_READ), dona
 });
 
 /**
+ * POST /donations
+ * Create a new donation.
+ * Requires Idempotency-Key header (UUID v4) to prevent duplicate donations from network retries.
+ */
+router.post('/', donationRateLimiter, checkPermission(PERMISSIONS.DONATIONS_CREATE), requireIdempotency, payloadSizeLimiter(ENDPOINT_LIMITS.singleDonation), asyncHandler(async (req, res, next) => {
+  try {
+    const { senderId, receiverId, amount, memo } = req.body;
+
+    if (!senderId || !receiverId || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: senderId, receiverId, amount'
+      });
+    }
+
+    const amountValidation = validateFloat(amount);
+    if (!amountValidation.valid) {
+      return res.status(400).json({ success: false, error: `Invalid amount: ${amountValidation.error}` });
+    }
+
+    const result = await donationService.sendCustodialDonation({
+      senderId,
+      receiverId,
+      amount: amountValidation.value,
+      memo: memo || null,
+      idempotencyKey: req.idempotency && req.idempotency.key,
+      requestId: req.id,
+    });
+
+    const response = { success: true, data: result };
+    await storeIdempotencyResponse(req, response);
+
+    return res.status(201).json(response);
+  } catch (error) {
+    next(error);
+  }
+}));
+
+/**
+ * GET /donations
+ * List all donations with optional pagination.
+ */
+router.get('/', checkPermission(PERMISSIONS.DONATIONS_READ), asyncHandler(async (req, res, next) => {
+  try {
+    const pagination = parseCursorPaginationQuery(req.query);
+    const result = donationService.getPaginatedDonations(pagination);
+    res.setHeader('X-Total-Count', String(result.totalCount));
+    res.json({ success: true, data: result.data, count: result.data.length, meta: result.meta });
+  } catch (error) {
+    next(error);
+  }
+}));
+
+/**
  * GET /donations/recent
  * Get recent donations, ordered by creation date descending.
  * Must be registered before /:id to prevent Express matching "recent" as an id.
@@ -437,6 +491,23 @@ router.get('/:id', checkPermission(PERMISSIONS.DONATIONS_READ), donationIdParamS
     // Mark processing complete
     if (req.markLifecycleStage) {
       req.markLifecycleStage(LIFECYCLE_STAGES.PROCESSED);
+    }
+
+    // ETag and conditional request support (#751)
+    const lastModifiedDate = new Date(transaction.statusUpdatedAt || transaction.timestamp);
+    const etag = `"${transaction.id}-${lastModifiedDate.getTime()}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', lastModifiedDate.toUTCString());
+    res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+
+    if (req.headers['if-none-match'] === etag) {
+      return res.status(304).end();
+    }
+    if (req.headers['if-modified-since']) {
+      const ifModifiedSince = new Date(req.headers['if-modified-since']);
+      if (!isNaN(ifModifiedSince.getTime()) && lastModifiedDate <= ifModifiedSince) {
+        return res.status(304).end();
+      }
     }
 
     // HTTP/2 server push + Link header for related resources
