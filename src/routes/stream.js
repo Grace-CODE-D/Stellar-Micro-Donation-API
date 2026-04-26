@@ -669,12 +669,37 @@ router.delete('/schedules/:id', checkPermission(PERMISSIONS.STREAM_DELETE), stre
       });
     }
 
+    // Check if the schedule is currently being executed (#778)
+    const scheduler = require('../services/RecurringDonationScheduler');
+    const scheduleIdNum = parseInt(req.params.id, 10);
+    const isInProgress = scheduler.executingSchedules && scheduler.executingSchedules.has(scheduleIdNum);
+
+    if (isInProgress) {
+      // Mark as pending_cancellation — the scheduler will set it to cancelled after execution completes
+      await Database.run(
+        'UPDATE recurring_donations SET status = ? WHERE id = ?',
+        ['pending_cancellation', req.params.id]
+      );
+
+      log.info('STREAM_ROUTE', 'Schedule cancellation deferred — execution in progress', {
+        scheduleId: req.params.id,
+        cancelledBy: userPublicKey || req.user?.id,
+        isAdmin
+      });
+
+      return res.json({
+        success: true,
+        cancellationStatus: 'deferred',
+        message: 'Schedule is currently executing. Cancellation will take effect after the current execution completes.'
+      });
+    }
+
     await Database.run(
       'UPDATE recurring_donations SET status = ? WHERE id = ?',
       ['cancelled', req.params.id]
     );
 
-    log.info('STREAM_ROUTE', 'Schedule cancelled', {
+    log.info('STREAM_ROUTE', 'Schedule cancelled immediately', {
       scheduleId: req.params.id,
       cancelledBy: userPublicKey || req.user?.id,
       isAdmin
@@ -682,6 +707,7 @@ router.delete('/schedules/:id', checkPermission(PERMISSIONS.STREAM_DELETE), stre
 
     res.json({
       success: true,
+      cancellationStatus: 'immediate',
       message: 'Recurring donation schedule cancelled successfully'
     });
   } catch (error) {

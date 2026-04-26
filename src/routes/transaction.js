@@ -213,6 +213,17 @@ const transactionSyncBodySchema = validateSchema({
   },
 });
 
+/**
+ * Map a transaction record to include stellarTxHash for blockchain verification (#776).
+ * stellarTxHash is a 64-char hex string when present, or null for pending transactions.
+ */
+function withStellarTxHash(tx) {
+  return {
+    ...tx,
+    stellarTxHash: tx.stellarTxId || null,
+  };
+}
+
 router.get('/', checkPermission(PERMISSIONS.TRANSACTIONS_READ), transactionListQuerySchema, asyncHandler(async (req, res, next) => {
   try {
     const { limit = 20, offset, cursor } = req.query;
@@ -226,7 +237,7 @@ router.get('/', checkPermission(PERMISSIONS.TRANSACTIONS_READ), transactionListQ
 
       return res.status(200).json({
         success: true,
-        data: result.data,
+        data: result.data.map(withStellarTxHash),
         pagination: {
           limit: parseInt(limit),
           nextCursor: result.nextCursor,
@@ -262,7 +273,7 @@ router.get('/', checkPermission(PERMISSIONS.TRANSACTIONS_READ), transactionListQ
 
       return res.status(200).json({
         success: true,
-        data: result.data,
+        data: result.data.map(withStellarTxHash),
         pagination: result.pagination
       });
     }
@@ -274,7 +285,7 @@ router.get('/', checkPermission(PERMISSIONS.TRANSACTIONS_READ), transactionListQ
 
     return res.status(200).json({
       success: true,
-      data: result.data,
+      data: result.data.map(withStellarTxHash),
       pagination: {
         limit: parseInt(limit),
         nextCursor: result.nextCursor,
@@ -671,6 +682,30 @@ router.get('/stream', (req, res) => {
   // Send initial connection event
   res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
 }));
+
+/**
+ * GET /transactions/:id
+ * Get a single transaction by ID, including stellarTxHash for blockchain verification (#776).
+ * Must be declared after all specific named routes to avoid shadowing them.
+ */
+router.get(
+  '/:id',
+  checkPermission(PERMISSIONS.TRANSACTIONS_READ),
+  asyncHandler(async (req, res, next) => {
+    try {
+      const tx = Transaction.getById(req.params.id);
+      if (!tx) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'TRANSACTION_NOT_FOUND', message: `Transaction ${req.params.id} not found` },
+        });
+      }
+      return res.status(200).json({ success: true, data: withStellarTxHash(tx) });
+    } catch (error) {
+      next(error);
+    }
+  })
+);
 
 module.exports = router;
 module.exports.sseManager = sseManager;
