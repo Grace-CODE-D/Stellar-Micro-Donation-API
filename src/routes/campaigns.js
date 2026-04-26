@@ -542,9 +542,10 @@ router.post('/admin/:id/milestones/:milestoneId/verify', requireApiKey, checkPer
 
 /**
  * GET /campaigns/:id/progress
- * Returns total raised, milestone completion, and remaining amount.
+ * Returns real-time funding progress for a campaign (#779).
+ * Response is cached for 30 seconds.
  */
-router.get('/:id/progress', requireApiKey, asyncHandler(async (req, res, next) => {
+router.get('/:id/progress', requireApiKey, cacheMiddleware('campaign-progress', 'public'), asyncHandler(async (req, res, next) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
 
@@ -568,15 +569,33 @@ router.get('/:id/progress', requireApiKey, asyncHandler(async (req, res, next) =
       ? Math.min(100, Math.round((campaign.current_amount / campaign.goal_amount) * 100))
       : 0;
 
+    // Count unique donors for this campaign
+    const donorCountRow = await Database.get(
+      `SELECT COUNT(DISTINCT senderId) AS donorCount
+       FROM transactions
+       WHERE campaign_id = ? AND deleted_at IS NULL`,
+      [campaignId]
+    );
+    const donorCount = donorCountRow ? donorCountRow.donorCount : 0;
+
+    // Calculate days remaining (null if no end_date or already ended)
+    let daysRemaining = null;
+    if (campaign.end_date) {
+      const msRemaining = new Date(campaign.end_date).getTime() - Date.now();
+      daysRemaining = msRemaining > 0 ? Math.ceil(msRemaining / (1000 * 60 * 60 * 24)) : 0;
+    }
+
     res.json({
       success: true,
       data: {
         campaignId,
         name: campaign.name,
         goalAmount: campaign.goal_amount,
-        currentAmount: campaign.current_amount,
+        raisedAmount: campaign.current_amount,
         remaining: Math.max(0, campaign.goal_amount - campaign.current_amount),
-        progressPercent: progressPct,
+        percentage: progressPct,
+        donorCount,
+        daysRemaining,
         status: campaign.status,
         milestones: {
           total: totalMilestones,

@@ -416,6 +416,29 @@ class RecurringDonationScheduler {
           await this.handlePersistentFailure(schedule, lastError);
         } finally {
           this.executingSchedules.delete(schedule.id);
+
+          // Apply deferred cancellation (#778): if the schedule was cancelled while in-flight,
+          // finalize the cancellation now that execution has completed.
+          try {
+            const current = await Database.get(
+              'SELECT status FROM recurring_donations WHERE id = ?',
+              [schedule.id]
+            );
+            if (current && current.status === 'pending_cancellation') {
+              await Database.run(
+                'UPDATE recurring_donations SET status = ? WHERE id = ?',
+                ['cancelled', schedule.id]
+              );
+              log.info('RECURRING_SCHEDULER', 'Deferred cancellation applied after execution', {
+                scheduleId: schedule.id,
+              });
+            }
+          } catch (cancelErr) {
+            log.error('RECURRING_SCHEDULER', 'Failed to apply deferred cancellation', {
+              scheduleId: schedule.id,
+              error: cancelErr.message,
+            });
+          }
         }
       },
       { scheduleId: schedule.id }
