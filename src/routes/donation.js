@@ -326,6 +326,29 @@ router.post('/send', payloadSizeLimiter(ENDPOINT_LIMITS.singleDonation), donatio
       });
     }
 
+    // Guard: reject donations to expired campaigns
+    if (campaign_id) {
+      const Database = require('../utils/database');
+      const campaign = await Database.get(
+        `SELECT id, end_date, status FROM campaigns WHERE id = ? AND deleted_at IS NULL`,
+        [campaign_id]
+      );
+      if (!campaign) {
+        return res.status(404).json({ success: false, error: 'Campaign not found' });
+      }
+      const isExpired =
+        campaign.status === 'expired' ||
+        (campaign.end_date && new Date(campaign.end_date) < new Date());
+      if (isExpired) {
+        return res.status(422).json({
+          success: false,
+          error: 'Campaign has ended',
+          campaignId: campaign.id,
+          endedAt: campaign.end_date
+        });
+      }
+    }
+
     // Delegate to service
     const result = await donationService.sendCustodialDonation({
       senderId,
@@ -445,8 +468,6 @@ router.post('/batch', payloadSizeLimiter(ENDPOINT_LIMITS.batchDonation), safeBat
  */
 router.post('/', payloadSizeLimiter(ENDPOINT_LIMITS.singleDonation), donationRateLimiter, requireApiKey, requireIdempotency, createDonationSchema, async (req, res, next) => {
   try {
-    const { amount, currency, donor, recipient, memo, memoType, notes, tags, encryptMemo } = req.body;
-    const { amount, currency, donor, recipient, memo, memoType, notes, tags, anonymous } = req.body;
     const { amount, currency, donor, recipient, memo, memoType, notes, tags, sourceAsset, sourceAmount } = req.body;
 
     // Basic validation

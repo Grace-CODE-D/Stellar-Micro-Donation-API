@@ -18,7 +18,6 @@
 const Database = require('../utils/database');
 const WebhookService = require('./WebhookService');
 const { SCHEDULE_STATUS, DONATION_FREQUENCIES } = require('../constants');
-const Database = require('../utils/database');
 const log = require('../utils/log');
 const { revokeExpiredDeprecatedKeys } = require('../models/apiKeys');
 const {
@@ -105,43 +104,6 @@ class RecurringDonationScheduler {
    * @returns {Promise<void>}
    */
   async processSchedules() {
-    if (!this.isRunning) return;
-
-    return withBackgroundContext('process_schedules', async () => {
-      const { correlationId, traceId } = getCorrelationSummary();
-      try {
-        const now = new Date().toISOString();
-
-        const dueSchedules = await Database.query(
-          `SELECT
-            rd.id,
-            rd.donorId,
-            rd.recipientId,
-            rd.amount,
-            rd.frequency,
-            rd.customIntervalDays,
-            rd.maxExecutions,
-            rd.webhookUrl,
-            rd.failureCount,
-            rd.nextExecutionDate,
-            rd.executionCount,
-            rd.lastExecutionDate,
-            donor.publicKey  AS donorPublicKey,
-            recipient.publicKey AS recipientPublicKey
-           FROM recurring_donations rd
-           JOIN users donor     ON rd.donorId    = donor.id
-           JOIN users recipient ON rd.recipientId = recipient.id
-           WHERE rd.status = ?
-             AND rd.nextExecutionDate <= ?`,
-          [SCHEDULE_STATUS.ACTIVE, now]
-        );
-
-        if (dueSchedules.length > 0) {
-          log.info('RECURRING_SCHEDULER', 'Found due schedules', {
-            count: dueSchedules.length,
-            correlationId,
-            traceId,
-          });
     if (!this.isRunning) {
       return;
     }

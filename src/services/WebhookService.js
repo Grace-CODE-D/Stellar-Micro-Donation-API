@@ -12,8 +12,13 @@
 
 const https = require('https');
 const http = require('http');
+const crypto = require('crypto');
 const { URL } = require('url');
 const log = require('../utils/log');
+
+const MAX_RETRIES = 3;
+const MAX_CONSECUTIVE_FAILURES = 5;
+const BASE_BACKOFF_MS = 1000;
 const { 
   getCorrelationContext, 
   withAsyncContext, 
@@ -42,15 +47,6 @@ class WebhookService {
     }
 
     let parsedUrl;
-  /**
-   * Deliver an event to all active webhooks subscribed to it.
-   * Fires-and-forgets retries; does not block the caller.
-   * Propagates correlation context through async operations.
-   * @param {string} event - Event type e.g. 'transaction.confirmed'
-   * @param {object} payload - Event data
-   */
-  static async deliver(event, payload) {
-    let webhooks;
     try {
       parsedUrl = new URL(webhookUrl);
     } catch {
@@ -66,11 +62,54 @@ class WebhookService {
 
     return new Promise((resolve) => {
       const transport = parsedUrl.protocol === 'https:' ? https : http;
+      const options = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          'User-Agent': 'Stella-Donation-API/1.0',
+          'X-Stella-Event': 'recurring_donation.persistent_failure',
+        },
+        timeout: 10000,
+      };
+
+      const req = transport.request(options, (res) => {
+        res.resume();
+        const delivered = res.statusCode >= 200 && res.statusCode < 300;
+        resolve({ delivered, statusCode: res.statusCode });
+      });
+
+      req.on('timeout', () => { req.destroy(); resolve({ delivered: false, error: 'Request timed out' }); });
+      req.on('error', (err) => { resolve({ delivered: false, error: err.message }); });
+      req.write(body);
+      req.end();
+    });
+  }
+
+  /**
+   * Deliver an event to all active webhooks subscribed to it.
+   * Fires-and-forgets retries; does not block the caller.
+   * @param {string} event - Event type e.g. 'transaction.confirmed'
+   * @param {object} payload - Event data
+   */
+  async deliver(event, payload) {
     // Capture correlation context from current request
     const parentContext = getCorrelationContext();
+    let interested = [];
+    try {
+      const Database = require('../utils/database');
+      interested = await Database.query(
+        `SELECT * FROM webhooks WHERE is_active = 1 AND (events IS NULL OR events LIKE ?)`,
+        [`%${event}%`]
+      );
+    } catch {
+      // webhooks table may not exist in all environments
+    }
 
     for (const webhook of interested) {
-      // Fire-and-forget with retry, propagating correlation context through async boundaries
       withAsyncContext('webhook_delivery', async () => {
         await this._deliverWithRetry(webhook, event, payload, 0);
       }, {
@@ -86,7 +125,7 @@ class WebhookService {
    * Maintains correlation context across retry attempts.
    * @private
    */
-  static async _deliverWithRetry(webhook, event, payload, attempt) {
+  async _deliverWithRetry(webhook, event, payload, attempt) {
     const correlationHeaders = generateCorrelationHeaders();
     const body = JSON.stringify({ 
       event, 
@@ -158,7 +197,7 @@ class WebhookService {
    * @param {string} secret - Webhook secret
    * @returns {string} hex digest
    */
-  static _sign(body, secret) {
+  _sign(body, secret) {
     return crypto.createHmac('sha256', secret).update(body).digest('hex');
   }
 
@@ -167,53 +206,33 @@ class WebhookService {
    * Includes correlation headers for traceability.
    * @private
    */
-  static _httpPost(url, body, signature, correlationHeaders = {}) {
+  _httpPost(url, body, signature, correlationHeaders = {}) {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url);
       const lib = parsed.protocol === 'https:' ? https : http;
       const options = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
           'User-Agent': 'Stella-Donation-API/1.0',
-          'X-Stella-Event': 'recurring_donation.persistent_failure',
           'X-Webhook-Signature': `sha256=${signature}`,
           ...correlationHeaders,
         },
-        timeout: 10000, // 10 second timeout
+        timeout: 10000,
       };
 
-      const req = transport.request(options, (res) => {
-        // Drain response body
+      const req = lib.request(options, (res) => {
         res.resume();
         const delivered = res.statusCode >= 200 && res.statusCode < 300;
-        log.info('WEBHOOK_SERVICE', 'Webhook delivered', {
-          scheduleId: payload.scheduleId,
-          statusCode: res.statusCode,
-          delivered,
-        });
         resolve({ delivered, statusCode: res.statusCode });
       });
 
-      req.on('timeout', () => {
-        req.destroy();
-        log.warn('WEBHOOK_SERVICE', 'Webhook request timed out', { webhookUrl, scheduleId: payload.scheduleId });
-        resolve({ delivered: false, error: 'Request timed out' });
-      });
-
-      req.on('error', (err) => {
-        log.warn('WEBHOOK_SERVICE', 'Webhook request failed', {
-          webhookUrl,
-          scheduleId: payload.scheduleId,
-          error: err.message,
-        });
-        resolve({ delivered: false, error: err.message });
-      });
-
+      req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')); });
+      req.on('error', reject);
       req.write(body);
       req.end();
     });
